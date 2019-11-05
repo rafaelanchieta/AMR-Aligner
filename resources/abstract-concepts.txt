@@ -1,0 +1,8 @@
+monetary-quantity, distance-quantity, area-quantity, volume-quantity, temporal-quantity, frequency-quantity, 
+speed-quantity, acceleration-quantity, mass-quantity, force-quantity, pressure-quantity, energy-quantity, 
+power-quantity, voltage-quantity, charge-quantity, potential-quantity, resistance-quantity, inductance-quantity, 
+magnetic-field-quantity, magnetic-flux-quantity, radiation-quantity, concentration-quantity, temperature-quantity, 
+score-quantity, fuel-consumption-quantity, seismic-quantity, rate-entity-91, ordinal-entity, relative-position, 
+have-rel-role-91, amr-unknown, have-degree-91, be-located-at-91, contrast-01, date-entity, phone-number-entity, 
+email-address-entity, url-entity, have-quant-91, request-confirmation-91, date-interval, be-temporally-at-91, 
+statistical-test-91, percentage-entity
