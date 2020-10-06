@@ -1,0 +1,4 @@
+gensim
+stanza
+num2words
+nltk

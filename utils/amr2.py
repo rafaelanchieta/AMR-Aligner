@@ -1,25 +1,29 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# This module was developed by Cai and Knight (2013) as part of the Smatch metric
+# More details about Smatch metric may be found at https://github.com/snowblink14/smatch/
+# This module is under the MIT License https://github.com/snowblink14/smatch/blob/master/LICENSE.txt
+
 """
 AMR (Abstract Meaning Representation) structure
 For detailed description of AMR, see http://www.isi.edu/natural-language/amr/a.pdf
 
 """
-import logging
 import re
 import sys
 from collections import defaultdict
 
-# ERROR_LOG = sys.stderr
+# change this if needed
+from penman import layout
+from penman.codec import PENMANCodec
+
 import penman
 
-logging.basicConfig(level=logging.ERROR)
-ERROR_LOG = logging.getLogger(__name__)
+ERROR_LOG = sys.stderr
+
 # change this if needed
-# DEBUG_LOG = sys.stderr
-logging.basicConfig(level=logging.DEBUG)
-DEBUG_LOG = logging.getLogger(__name__)
+DEBUG_LOG = sys.stderr
 
 
 class AMR(object):
@@ -39,7 +43,6 @@ class AMR(object):
                node name, attribute value> is used to represent such attribute. It can also be viewed as a relation.
 
     """
-
     def __init__(self, node_list=None, node_value_list=None, relation_list=None, attribute_list=None):
         """
         node_list: names of nodes in AMR graph, e.g. "a11", "n"
@@ -113,6 +116,7 @@ class AMR(object):
                 attribute_triple.append((l[0], self.nodes[i], l[1]))
         return instance_triple, attribute_triple, relation_triple
 
+
     def get_triples2(self):
         """
         Get the triples in two lists:
@@ -146,7 +150,7 @@ class AMR(object):
         """
         lines = []
         for i in range(len(self.nodes)):
-            lines.append("Node " + str(i) + " " + self.nodes[i])
+            lines.append("Node "+ str(i) + " " + self.nodes[i])
             lines.append("Value: " + self.node_values[i])
             lines.append("Relations:")
             for relation in self.relations[i]:
@@ -163,8 +167,7 @@ class AMR(object):
         Output AMR string
 
         """
-        ERROR_LOG.error(self.__str__())
-        # print >> DEBUG_LOG, self.__str__()
+        print(self.__str__(), file=DEBUG_LOG)
 
     @staticmethod
     def get_amr_line(input_f):
@@ -174,13 +177,10 @@ class AMR(object):
         Note: this function does not verify if the AMR is valid
 
         """
-        key, value = [], []
-        # read_amr = ''
-        regex1 = r'# ::tok (.+)'
         regex = r'# ::snt (.+)'
+        sentence = ''
         cur_amr = []
         has_content = False
-        sentence = ''
         for line in input_f:
             line = line.strip()
             if line == "":
@@ -190,30 +190,26 @@ class AMR(object):
                 else:
                     # end of current AMR
                     break
-            if line.strip().startswith("# ::snt "):
+            if line.strip().startswith('# ::snt'):
                 sentence = re.match(regex, line.strip()).group(1)
-                # updated
+            if line.strip().startswith("#"):
                 # ignore the comment line (starting with "#") in the AMR file
-                # continue
-            elif line.strip().startswith('# ::tok '):
-                tokens = re.match(regex1, line.strip()).group(1).lower().split()
-            elif line.strip().startswith('# ::node'):
-                token = line.split('\t')
-                key.append(token[2].rstrip())
-                value.append(token[1])
-                # level[token[2].rstrip()] = token[1]
-            elif line.strip().startswith('#'):
                 continue
             else:
                 has_content = True
-                # read_amr += line
                 cur_amr.append(line.strip())
         if cur_amr:
             g = penman.decode(' '.join(cur_amr))
-            amr_penam = penman.encode(g)
-            return "".join(cur_amr), sentence, key, value, amr_penam, tokens
+            amr_penman = penman.encode(g)
+
+            c = PENMANCodec()
+            t = c.parse(amr_penman)
+            l = layout.interpret(t)
+            value, key = t.positions(l, 0)
+
+            return "".join(cur_amr), sentence, key, value, amr_penman
         else:
-            return '', '', '', '', '', ''
+            return '', '', '', '', ''
 
     @staticmethod
     def parse_AMR_line(line):
@@ -222,7 +218,6 @@ class AMR(object):
         This parsing algorithm scans the line once and process each character, in a shift-reduce style.
 
         """
-
         # Current state. It denotes the last significant symbol encountered. 1 for (, 2 for :, 3 for /,
         # and 0 for start state or ')'
         # Last significant symbol is ( --- start processing node name
@@ -230,6 +225,24 @@ class AMR(object):
         # Last significant symbol is / --- start processing node value (concept name)
         # Last significant symbol is ) --- current node processing is complete
         # Note that if these symbols are inside parenthesis, they are not significant symbols.
+
+        exceptions =set(["prep-on-behalf-of", "prep-out-of", "consist-of"])
+
+        def update_triple(node_relation_dict, u, r, v):
+            # we detect a relation (r) between u and v, with direction u to v.
+            # in most cases, if relation name ends with "-of", e.g."arg0-of",
+            # it is reverse of some relation. For example, if a is "arg0-of" b,
+            # we can also say b is "arg0" a.
+            # If the relation name ends with "-of", we store the reverse relation.
+            # but note some exceptions like "prep-on-behalf-of" and "prep-out-of"
+            # also note relation "mod" is the reverse of "domain"
+            if r.endswith("-of") and not r in exceptions:
+                node_relation_dict[v].append((r[:-3], u))
+            elif r == "mod":
+                node_relation_dict[v].append(("domain", u))
+            else:
+                node_relation_dict[u].append((r, v))
+
         state = 0
         # node stack for parsing
         stack = []
@@ -270,8 +283,7 @@ class AMR(object):
                 if state == 2:
                     # in this state, current relation name should be empty
                     if cur_relation_name != "":
-                        # print >> ERROR_LOG, "Format error when processing ", line[0:i + 1]
-                        ERROR_LOG.error("Format error when processing ", line[0:i + 1])
+                        print("Format error when processing ", line[0:i + 1], file=ERROR_LOG)
                         return None
                     # update current relation name for future use
                     cur_relation_name = "".join(cur_charseq).strip()
@@ -306,8 +318,7 @@ class AMR(object):
                     cur_charseq[:] = []
                     parts = temp_attr_value.split()
                     if len(parts) < 2:
-                        # print >> ERROR_LOG, "Error in processing; part len < 2", line[0:i + 1]
-                        ERROR_LOG.error("Error in processing; part len < 2", line[0:i + 1])
+                        print("Error in processing; part len < 2", line[0:i + 1], file=ERROR_LOG)
                         return None
                     # For the above example, node name is "op1", and node value is "w"
                     # Note that this node name might not be encountered before
@@ -316,14 +327,13 @@ class AMR(object):
                     # We need to link upper level node to the current
                     # top of stack is upper level node
                     if len(stack) == 0:
-                        # print >> ERROR_LOG, "Error in processing", line[:i], relation_name, relation_value
-                        ERROR_LOG.error("Error in processing", line[:i], relation_name, relation_value)
+                        print("Error in processing", line[:i], relation_name, relation_value, file=ERROR_LOG)
                         return None
                     # if we have not seen this node name before
                     if relation_value not in node_dict:
-                        node_relation_dict2[stack[-1]].append((relation_name, relation_value))
+                        update_triple(node_relation_dict2, stack[-1], relation_name, relation_value)
                     else:
-                        node_relation_dict1[stack[-1]].append((relation_name, relation_value))
+                        update_triple(node_relation_dict1, stack[-1], relation_name, relation_value)
                 state = 2
             elif c == "/":
                 if in_quote:
@@ -338,8 +348,7 @@ class AMR(object):
                     cur_charseq[:] = []
                     # if this node name is already in node_dict, it is duplicate
                     if node_name in node_dict:
-                        # print >> ERROR_LOG, "Duplicate node name ", node_name, " in parsing AMR", line
-                        ERROR_LOG.error("Duplicate node name ", node_name, " in parsing AMR", line)
+                        print("Duplicate node name ", node_name, " in parsing AMR", file=ERROR_LOG)
                         return None
                     # push the node name to stack
                     stack.append(node_name)
@@ -352,22 +361,11 @@ class AMR(object):
                     # node name is n
                     # we have a relation arg1(upper level node, n)
                     if cur_relation_name != "":
-                        # if relation name ends with "-of", e.g."arg0-of",
-                        # it is reverse of some relation. For example, if a is "arg0-of" b,
-                        # we can also say b is "arg0" a.
-                        # If the relation name ends with "-of", we store the reverse relation.
-                        if not cur_relation_name.endswith("-of"):
-                            # stack[-2] is upper_level node we encountered, as we just add node_name to stack
-                            node_relation_dict1[stack[-2]].append((cur_relation_name, node_name))
-                        else:
-                            # cur_relation_name[:-3] is to delete "-of"
-                            node_relation_dict1[node_name].append((cur_relation_name[:-3], stack[-2]))
-                        # clear current_relation_name
+                        update_triple(node_relation_dict1, stack[-2], cur_relation_name, node_name)
                         cur_relation_name = ""
                 else:
                     # error if in other state
-                    # print >> ERROR_LOG, "Error in parsing AMR", line[0:i + 1]
-                    ERROR_LOG.error("Error in parsing AMR", line[0:i + 1])
+                    print("Error in parsing AMR", line[0:i + 1], file=ERROR_LOG)
                     return None
                 state = 3
             elif c == ")":
@@ -376,8 +374,7 @@ class AMR(object):
                     continue
                 # stack should be non-empty to find upper level node
                 if len(stack) == 0:
-                    # print >> ERROR_LOG, "Unmatched parenthesis at position", i, "in processing", line[0:i + 1]
-                    ERROR_LOG.error("Unmatched parenthesis at position", i, "in processing", line[0:i + 1])
+                    print("Unmatched parenthesis at position", i, "in processing", line[0:i + 1], file=ERROR_LOG)
                     return None
                 # Last significant symbol is ":". Now we encounter ")"
                 # Example:
@@ -388,22 +385,17 @@ class AMR(object):
                     cur_charseq[:] = []
                     parts = temp_attr_value.split()
                     if len(parts) < 2:
-                        # print >> ERROR_LOG, "Error processing", line[:i + 1], temp_attr_value
-                        ERROR_LOG.error("Error processing", line[:i + 1], temp_attr_value)
+                        print("Error processing", line[:i + 1], temp_attr_value, file=ERROR_LOG)
                         return None
                     relation_name = parts[0].strip()
                     relation_value = parts[1].strip()
-                    # store reverse of the relation
-                    # we are sure relation_value is a node here, as "-of" relation is only between two nodes
-                    if relation_name.endswith("-of"):
-                        node_relation_dict1[relation_value].append((relation_name[:-3], stack[-1]))
                     # attribute value not seen before
                     # Note that it might be a constant attribute value, or an unseen node
                     # process this after we have seen all the node names
-                    elif relation_value not in node_dict:
-                        node_relation_dict2[stack[-1]].append((relation_name, relation_value))
+                    if relation_value not in node_dict:
+                        update_triple(node_relation_dict2, stack[-1], relation_name, relation_value)
                     else:
-                        node_relation_dict1[stack[-1]].append((relation_name, relation_value))
+                        update_triple(node_relation_dict1, stack[-1], relation_name, relation_value)
                 # Last significant symbol is "/". Now we encounter ")"
                 # Example:
                 # :arg1 (n / nation)
@@ -427,8 +419,7 @@ class AMR(object):
         attribute_list = []
         for v in node_name_list:
             if v not in node_dict:
-                # print >> ERROR_LOG, "Error: Node name not found", v
-                ERROR_LOG.error("Error: Node name not found", v)
+                print("Error: Node name not found", v, file=ERROR_LOG)
                 return None
             else:
                 node_value_list.append(node_dict[v])
@@ -457,15 +448,6 @@ class AMR(object):
         result_amr = AMR(node_name_list, node_value_list, relation_list, attribute_list)
         return result_amr
 
-
-def get_word_level(input_f):
-    word_level = {}
-    for line in input_f:
-        if line.startswith('# ::node'):
-            token = line.split('\t')
-            word_level[token[2].rstrip()] = token[1]
-    return word_level
-
 # test AMR parsing
 # run by amr.py [file containing AMR]
 # a unittest can also be used.
@@ -473,17 +455,14 @@ def get_word_level(input_f):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        # print >> ERROR_LOG, "No file given"
-        ERROR_LOG.error("No file given")
+        print("No file given", file=ERROR_LOG)
         exit(1)
     amr_count = 1
-    with open(sys.argv[1]) as input_f:
-        while True:
-            cur_line = AMR.get_amr_line(input_f)
-            if cur_line == "":
-                break
-            # print >> DEBUG_LOG, "AMR", amr_count
-            DEBUG_LOG.debug("AMR", amr_count)
-            current = AMR.parse_AMR_line(cur_line)
-            current.output_amr()
-            amr_count += 1
+    for line in open(sys.argv[1]):
+        cur_line = line.strip()
+        if cur_line == "" or cur_line.startswith("#"):
+            continue
+        print("AMR", amr_count, file=DEBUG_LOG)
+        current = AMR.parse_AMR_line(cur_line)
+        current.output_amr()
+        amr_count += 1

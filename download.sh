@@ -1,14 +1,16 @@
 #!/bin/bash
 
-username=$(whoami)
+echo "Creating embeddings folder"
+mkdir -m 777 "embeddings"
+echo "Done!!!"
 
-wget http://143.107.183.175:22980/download.php?file=embeddings/glove/glove_s100.zip
-mkdir -p "models"
-unzip glove_s100.zip -d /models
-rm glove_s100.zip
+echo "Creating output folder"
+mkdir "output"
+echo "Done!!!"
 
-wget http://nlp.stanford.edu/software/stanfordnlp_models/0.2.0/pt_bosque_models.zip
-unzip pt_bosque_models.zip -d /home/$username
-rm pt_bosque_models.zip
-
+echo "Downloading pre-trained embeddings"
+wget http://143.107.183.175:23580/glove
+mv glove embeddings/glove
+wget http://143.107.183.175:23580/glove.vectors.npy
+mv glove.vectors.npy embeddings/glove.vectors.npy
 echo "Done!!"

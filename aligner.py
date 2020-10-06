@@ -1,25 +1,27 @@
 import argparse
 import codecs
+import os
 
-import stanfordnlp
+import stanza
 from gensim.models import KeyedVectors
-
 from num2words import num2words
-from utils.amr import AMR
+
+from utils import util
+from utils.amr2 import AMR
 from utils.text2int import text2int
 
 
 class Aligner:
 
     def __init__(self, model):
-        self.model = KeyedVectors.load_word2vec_format(model)
-        self.nlp = stanfordnlp.Pipeline(lang='pt', processors='tokenize,lemma')
+        self.model = KeyedVectors.load(model, mmap='r')
+        self.nlp = stanza.Pipeline(lang='pt')
         self.countries = self.read_resource('resources/countries.txt')
         self.nationalities = self.read_resource('resources/nationalities.txt')
-        self.negation = ['não', 'sem', 'mal']
+        self.negation = self.read_resource('resources/negations.txt')
         self.ner = self.read_resource('resources/ner.txt')
         self.abstract_concepts = self.read_resource('resources/abstract-concepts.txt')
-        self.adverses = ['mas', 'porém', 'contudo', 'todavia', 'entretanto', 'entanto', 'obstante']
+        self.adverses = self.read_resource('resources/adversatives.txt')
 
         self.threshold = 1.5
 
@@ -31,13 +33,13 @@ class Aligner:
                 resource.append(value.strip())
         return resource
 
-    def create_alignment(self, file, amr_graph, sentence, key_l, value_l, amr_penman, tokens):
+    def create_alignment(self, file, amr_graph, sentence, key_l, value_l, amr_penman):
         alignment = {}
 
         concepts, attributes, relations = amr_graph.get_triples()
 
         attributes = self.remove_top_relation(attributes)
-        filtered_tokens, lemma, oov = self.preprocess(sentence, tokens)
+        tokens, filtered_tokens, oov, lemma = self.preprocess(sentence)
         self.align_top(concepts, filtered_tokens, tokens, lemma, alignment, relations, attributes, key_l, value_l)
         self.align_concepts(concepts[1:], filtered_tokens, tokens, lemma, key_l, value_l, alignment, relations,
                             attributes)
@@ -51,24 +53,33 @@ class Aligner:
             elif attr == 'interrogative' and '?' in filtered_tokens:
                 position = [pos[0] for pos in tokens].index('?')
                 key = str(position)+'-'+str(position+1)+'|'
-                value = value_l[key_l.index(attr)]
-                if key not in alignment:
-                    alignment[key] = value
+                try:
+                    value = value_l[key_l.index(attr)]
+                    if key not in alignment:
+                        alignment[key] = value
+                except IndexError:
+                    continue
             elif attr == 'imperative' and '!' in filtered_tokens:
                 position = [pos[0] for pos in tokens].index('!')
                 key = str(position)+'-'+str(position+1)+'|'
-                value = value_l[key_l.index(attr)]
-                if key not in alignment:
-                    alignment[key] = value
+                try:
+                    value = value_l[key_l.index(attr)]
+                    if key not in alignment:
+                        alignment[key] = value
+                except IndexError:
+                    continue
             elif attr.isdigit() and num2words(int(attr), lang='pt_BR') in filtered_tokens:
                 for t in range(len(filtered_tokens)):
                     if num2words(int(attr), lang='pt_BR') == filtered_tokens[t]:
                         position = tokens.index(filtered_tokens[t])
                         key = str(position)+'-'+str(position+1)+'|'
-                        value = value_l[key_l.index(attr)]
-                        if key not in alignment:
-                            alignment[key] = value
-                            break
+                        try:
+                            value = value_l[key_l.index(attr)]
+                            if key not in alignment:
+                                alignment[key] = value
+                                break
+                        except IndexError:
+                            continue
             elif attr.isdigit() and num2words(int(attr), to='ordinal', lang='pt_BR') in filtered_tokens:
                 for t in range(len(filtered_tokens)):
                     if num2words(int(attr), to='ordinal', lang='pt_BR') == filtered_tokens[t]:
@@ -101,10 +112,13 @@ class Aligner:
                     if text2int(filtered_tokens[t]) == attr:
                         position = tokens.index(filtered_tokens[t])
                         key = str(position)+'-'+str(position+1)+'|'
-                        value = value_l[key_l.index(attr)]
-                        if key not in alignment:
-                            alignment[key] = value
-                            break
+                        try:
+                            value = value_l[key_l.index(attr)]
+                            if key not in alignment:
+                                alignment[key] = value
+                                break
+                        except IndexError:
+                            continue
 
     def align_negation(self, attribute, filtered_tokens, tokens, lemma, key_l, value_l, alignment):
         position = ''
@@ -114,9 +128,12 @@ class Aligner:
                     position = t
         if position != '':
             key = str(position)+'-'+str(position+1)+'|'
-            value = value_l[key_l.index(attribute)]
-            if key not in alignment:
-                alignment[key] = value
+            try:
+                value = value_l[key_l.index(attribute)]
+                if key not in alignment:
+                    alignment[key] = value
+            except IndexError:
+                pass
 
     @staticmethod
     def remove_top_relation(attributes):
@@ -124,19 +141,37 @@ class Aligner:
         del attributes[index]
         return attributes
 
-    def preprocess(self, sentence, tokens):
+    def preprocess(self, sentence):
+        tokens, lemma = self.get_features(sentence)
+        tokens, filtered_tokens, oov, lemma = self._get_tokens(self.model, sentence, tokens, lemma)
+        return tokens, filtered_tokens, oov, lemma
 
-        filtered_tokens, oov = self.filter_tokens(tokens)
-        if filtered_tokens:
-            lemma = self.get_lemma(filtered_tokens)
-        else:
-            lemma = []
-        return filtered_tokens, lemma, oov
+    def get_features(self, sentence):
+        tokens, lemmas = [], []
+        doc = self.nlp(sentence)
+        for sent in doc.sentences:
+            for word in sent.words:
+                tokens.append(word.text)
+                lemmas.append(word.lemma)
+        return tokens, lemmas
+
+    @staticmethod
+    def _get_tokens(model, sentence, tokens_nlp, lemma_nlp):
+        lemma, filtered_tokens, oov = [], [], []
+        tokens = util.tokenize(sentence)
+        for token in tokens:
+            if str(token).lower() in model and token in tokens_nlp:
+                    filtered_tokens.append(token)
+                    lemma.append(lemma_nlp[tokens_nlp.index(token)])
+            else:
+                oov.append(token)
+
+        return tokens, filtered_tokens, oov, lemma
 
     def filter_tokens(self, tokens):
         filtered_tokens, oov = [], []
         for token in tokens:
-            if token in self.model.vocab:
+            if str(token).lower() in self.model.vocab:
                 filtered_tokens.append(token)
             else:
                 oov.append(token)
@@ -200,7 +235,7 @@ class Aligner:
                         value = value_l[key_l.index(concept)]
                         if key not in alignment:
                             alignment[key] = value
-                    except ValueError:
+                    except (ValueError, IndexError):
                         continue
 
     def align_named_entities(self, concepts, var_con, concept, relations, attributes, tokens, filtered_tokens,
@@ -213,9 +248,12 @@ class Aligner:
                     # word_level.append(level.get(concept))
             if position:
                 key = str(position[0])+'-'+str(position[-1]+1)+'|'
-                value = value_l[key_l.index(concept)]
-                if key not in alignment:
-                    alignment[key] = value
+                try:
+                    value = value_l[key_l.index(concept)]
+                    if key not in alignment:
+                        alignment[key] = value
+                except IndexError:
+                    pass
         elif concept == 'be-located-at-91':
             for token in range(len(tokens)):
                 if tokens[token] == 'eis' or tokens[token] == 'aqui' or tokens[token] == 'está':
@@ -223,9 +261,12 @@ class Aligner:
                     break
             if position:
                 key = str(position[0]) + '-' + str(position[-1] + 1) + '|'
-                value = value_l[key_l.index(concept)]
-                if key not in alignment:
-                    alignment[key] = value
+                try:
+                    value = value_l[key_l.index(concept)]
+                    if key not in alignment:
+                        alignment[key] = value
+                except IndexError:
+                    pass
         elif concept == 'be-temporally-at-91':
             return
         else:
@@ -241,10 +282,13 @@ class Aligner:
                             n_attr = attr[:-1]
                             if n_attr.lower() in tokens:
                                 position.append(tokens.index(n_attr.lower()))
-                                word_level.append(value_l[key_l.index('"'+n_attr+'"')])
-                                key_l.remove('"'+n_attr+'"')
-                                value_l.remove(word_level[-1])
-                                attributes.remove((x, y, attr))
+                                try:
+                                    word_level.append(value_l[key_l.index('"'+n_attr+'"')])
+                                    key_l.remove('"'+n_attr+'"')
+                                    value_l.remove(word_level[-1])
+                                    attributes.remove((x, y, attr))
+                                except IndexError:
+                                    continue
                             elif n_attr in self.countries:
                                 try:
                                     position.append(tokens.index(self.nationalities[self.countries.index(n_attr)]))
@@ -265,15 +309,18 @@ class Aligner:
                         for w in word_level:
                             s += w+'+'
                         key = str(position[0])+'-'+str(position[-1]+1)+'|'
-                        value = value_l[key_l.index(concept)]+'+'+value_l[key_l.index(node[0][0])]+'+'+s[:-1]
-                        aux = [(x, y, z) for x, y, z in concepts if node[0][2] == y][0]
-                        concepts.remove(aux)
-                        value_l.remove(value_l[key_l.index(node[0][0])])
-                        key_l.remove(node[0][0])
-                        value_l.remove(value_l[key_l.index(concept)])
-                        key_l.remove(concept)
-                        if key not in alignment:
-                            alignment[key] = value
+                        try:
+                            value = value_l[key_l.index(concept)]+'+'+value_l[key_l.index(node[0][0])]+'+'+s[:-1]
+                            aux = [(x, y, z) for x, y, z in concepts if node[0][2] == y][0]
+                            concepts.remove(aux)
+                            value_l.remove(value_l[key_l.index(node[0][0])])
+                            key_l.remove(node[0][0])
+                            value_l.remove(value_l[key_l.index(concept)])
+                            key_l.remove(concept)
+                            if key not in alignment:
+                                alignment[key] = value
+                        except IndexError:
+                            pass
                 else:
                     for rel, tgt, nod in concepts:
                         for x, y, z in node:
@@ -286,9 +333,12 @@ class Aligner:
                                         token = filtered_tokens[t]
                                 if distance < self.threshold:
                                     position.append(tokens.index(token))
-                                    word_level.append(value_l[key_l.index(nod)])
-                                    key_l.remove(nod)
-                                    value_l.remove(word_level[-1])
+                                    try:
+                                        word_level.append(value_l[key_l.index(nod)])
+                                        key_l.remove(nod)
+                                        value_l.remove(word_level[-1])
+                                    except IndexError:
+                                        continue
                     if word_level:
                         s = ''
                         for w in word_level:
@@ -303,11 +353,17 @@ class Aligner:
                         n_attr = attr[:-1]
                         if n_attr.lower() in tokens:
                             position.append(tokens.index(n_attr.lower()))
-                            word_level.append(value_l[key_l.index('"' + n_attr + '"')])
-                            attributes.remove((x, y, attr))
+                            try:
+                                word_level.append(value_l[key_l.index('"' + n_attr + '"')])
+                                attributes.remove((x, y, attr))
+                            except IndexError:
+                                continue
                         elif n_attr.replace('"', '') in self.countries:
                             position.append(tokens.index(self.nationalities[self.countries.index(n_attr.replace('"', ''))]))
-                            word_level.append(value_l[key_l.index('"' + n_attr + '"')])
+                            try:
+                                word_level.append(value_l[key_l.index('"' + n_attr + '"')])
+                            except IndexError:
+                                continue
                             attributes.remove((x, y, attr))
                     elif len(tokens) == 1:
                         if '-' in tokens[0]:
@@ -344,15 +400,18 @@ class Aligner:
                     for w in word_level:
                         s += w + '+'
                     key = str(position[0])+'-'+str(position[-1]+1)+'|'
-                    value = value_l[key_l.index(concept)]+'+'+s[:-1]
-                    value_l.remove(value_l[key_l.index(concept)])
-                    key_l.remove(concept)
-                    if key not in alignment:
-                        alignment[key] = value
+                    try:
+                        value = value_l[key_l.index(concept)]+'+'+s[:-1]
+                        value_l.remove(value_l[key_l.index(concept)])
+                        key_l.remove(concept)
+                        if key not in alignment:
+                            alignment[key] = value
+                    except (ValueError, IndexError):
+                        pass
 
     @staticmethod
     def create_file_alignment(input_f, amr_penman, sentence, tokens, alignment):
-        with codecs.open('output/'+input_f+'.aligned', 'a', 'utf-8') as f:
+        with codecs.open('output/'+os.path.basename(input_f)+'.aligned', 'a', 'utf-8') as f:
             f.write('# ::snt ' + sentence + '\n')
             f.write('# ::tok ' + ' '.join(tokens) + '\n')
             f.write('# ::alignments ')
@@ -366,13 +425,13 @@ class Aligner:
 def main(data):
     flag = False
     print('Loading Pre-Trained Embeddings ...')
-    aligner = Aligner('models/glove100.txt')
+    aligner = Aligner('embeddings/glove')
     print('Done!!!')
 
-    print('### Running alignment ###')
+    # print('### Running alignment ###')
     with codecs.open(data.file, 'r', 'utf-8') as amr_f:
         while True:
-            amr, sentence, key, value, amr_penman, tokens = AMR.get_amr_line(amr_f)
+            amr, sentence, key, value, amr_penman = AMR.get_amr_line(amr_f)
             if amr == '':
                 break
             try:
@@ -382,12 +441,12 @@ def main(data):
                 break
             prefix = 'a'
             amr.rename_node(prefix)
-            aligner.create_alignment(data.file, amr, sentence, key, value, amr_penman, tokens)
+            aligner.create_alignment(data.file, amr, sentence, key, value, amr_penman)
         if not flag:
             print('### Done ###')
 
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser(description='AMR Aligner', epilog='Usage: python aligner.py -f file')
+    args = argparse.ArgumentParser(description='AMR Aligner', epilog='Usage: python3 aligner.py -f file')
     args.add_argument('-f', '--file', help='Input AMR file', required=True)
     main(args.parse_args())
