@@ -3,7 +3,7 @@
 This repository contains the source code for the BR-Aligner
 
 ## Requirements
-- Python (3 or later)
+- Python 3 (or later)
 - `pip install -r requirements.txt`
 - `python3 config/config.py` to download the pre-trained models for Portuguese
 - `sh download.sh` to download the pre-trained embeddings
