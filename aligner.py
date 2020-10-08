@@ -44,7 +44,7 @@ class Aligner:
         self.align_concepts(concepts[1:], filtered_tokens, tokens, lemma, key_l, value_l, alignment, relations,
                             attributes)
         self.align_attributes(attributes, filtered_tokens, tokens, lemma, key_l, value_l, alignment, oov)
-        self.create_file_alignment(file, amr_penman, sentence, tokens, alignment)
+        self.create_file_alignment(file, amr_penman, sentence, tokens, alignment, key_l)
 
     def align_attributes(self, attributes, filtered_tokens, tokens, lemma, key_l, value_l, alignment, oov):
         for x, y, attr in attributes:
@@ -410,7 +410,7 @@ class Aligner:
                         pass
 
     @staticmethod
-    def create_file_alignment(input_f, amr_penman, sentence, tokens, alignment):
+    def create_file_alignment(input_f, amr_penman, sentence, tokens, alignment, key_l):
         with codecs.open('output/'+os.path.basename(input_f)+'.aligned', 'a', 'utf-8') as f:
             f.write('# ::snt ' + sentence + '\n')
             f.write('# ::tok ' + ' '.join(tokens) + '\n')
@@ -419,6 +419,10 @@ class Aligner:
                 f.write(key)
                 f.write(value+' ')
             f.write('\n')
+            i = 0
+            for k, v in alignment.items():
+                f.write('# ::node\t' + v + '\t' + key_l[i] + '\t' + k.split('|')[0] + '\n')
+                i += 1
             f.write(str(amr_penman) + '\n\n')
 
 
